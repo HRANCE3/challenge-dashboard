@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stock Dashboard</title>
+    <!-- Tailwind via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React + ReactDOM (production) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for inline JSX (fine for demo; for prod use a bundler) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Chart.js for optional chart -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <link rel="icon" href="data:," />
+  </head>
+  <body class="bg-gray-50 text-gray-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      // --- Utils
+      const fmtCurrency = (n) => (n == null || isNaN(n) ? '-' : n.toLocaleString(undefined, { style: 'currency', currency: 'USD' }));
+      const fmtPct = (n) => (n == null || isNaN(n) ? '-' : `${(n).toFixed(2)}%`);
+
+      // --- Finnhub API helpers
+      const FINNHUB_BASE = 'https://finnhub.io/api/v1';
+      async function fetchQuote(symbol, apiKey) {
+        const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Quote fetch failed for ${symbol}`);
+        const data = await res.json();
+        // data fields: c=current, d=change, dp=percent, h=high, l=low, o=open, pc=prev close, t=timestamp
+        return {
+          symbol,
+          price: data.c ?? null,
+          change: data.d ?? null,
+          changePct: data.dp ?? null,
+          updatedAt: data.t ? new Date(data.t * 1000) : null,
+        };
+      }
+
+      async function fetchCandles(symbol, apiKey, days = 120) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const fromSec = nowSec - days * 24 * 60 * 60;
+        const url = `${FINNHUB_BASE}/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=D&from=${fromSec}&to=${nowSec}&token=${apiKey}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Candle fetch failed');
+        const data = await res.json();
+        if (data.s !== 'ok') throw new Error(data.s || 'No data');
+        return data; // { c, h, l, o, s, t, v }
+      }
+
+      // --- Components
+      function Pill({ children, intent = 'neutral' }) {
+        const map = {
+          neutral: 'bg-gray-100 text-gray-800',
+          success: 'bg-green-100 text-green-800',
+          danger: 'bg-red-100 text-red-800',
+        };
+        return <span className={`px-2 py-0.5 rounded-full text-xs ${map[intent]}`}>{children}</span>;
+      }
+
+      function Spinner({ label }) {
+        return (
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            {label || 'Loading...'}
+          </div>
+        );
+      }
+
+      function Modal({ open, onClose, title, children }) {
+        if (!open) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+            <div className="relative bg-white shadow-2xl rounded-2xl w-[95vw] max-w-3xl max-h-[85vh] overflow-hidden">
+              <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b">
+                <h3 className="font-semibold text-lg">{title}</h3>
+                <button className="p-2 rounded-lg hover:bg-gray-100" onClick={onClose} aria-label="Close">✕</button>
+              </div>
+              <div className="p-4 sm:p-6 overflow-auto">{children}</div>
+            </div>
+          </div>
+        );
+      }
+
+      function Chart({ symbol, apiKey }) {
+        const canvasRef = useRef(null);
+        const [state, setState] = useState({ loading: true, error: null });
+
+        useEffect(() => {
+          let chart;
+          let mounted = true;
+          (async () => {
+            try {
+              setState({ loading: true, error: null });
+              const data = await fetchCandles(symbol, apiKey, 180);
+              if (!mounted) return;
+              const labels = data.t.map((t) => new Date(t * 1000).toLocaleDateString());
+              const prices = data.c;
+              const ctx = canvasRef.current.getContext('2d');
+              chart = new ChartJS.Chart(ctx, {
+                type: 'line',
+                data: {
+                  labels,
+                  datasets: [
+                    { label: `${symbol} Close`, data: prices, borderWidth: 2, fill: false, tension: 0.15 },
+                  ],
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { maxTicksLimit: 8 } } } },
+              });
+              setState({ loading: false, error: null });
+            } catch (e) {
+              setState({ loading: false, error: e.message || 'Failed to load chart' });
+            }
+          })();
+          return () => {
+            mounted = false;
+            if (chart) chart.destroy();
+          };
+        }, [symbol, apiKey]);
+
+        if (state.loading) return <Spinner label={`Loading ${symbol} chart...`} />;
+        if (state.error) return <div className="text-sm text-red-600">{state.error}</div>;
+        return <div className="h-80"><canvas ref={canvasRef} /></div>;
+      }
+
+      function App() {
+        // Default list; keep short to respect free tier limits
+        const [symbols, setSymbols] = useState(['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']);
+        const [apiKey, setApiKey] = useState(localStorage.getItem('FINNHUB_KEY') || '');
+        const [query, setQuery] = useState('');
+        const [sort, setSort] = useState({ by: 'symbol', dir: 'asc' });
+        const [rows, setRows] = useState([]);
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState(null);
+        const [selected, setSelected] = useState(null); // symbol for chart
+
+        useEffect(() => {
+          if (!apiKey) return; // wait until user provides an API key
+          let mounted = true;
+          (async () => {
+            try {
+              setLoading(true);
+              setError(null);
+              const results = await Promise.all(symbols.map((s) => fetchQuote(s, apiKey).catch((e) => ({ symbol: s, error: e.message }))));
+              if (!mounted) return;
+              setRows(results);
+            } catch (e) {
+              setError(e.message || 'Failed to fetch');
+            } finally {
+              setLoading(false);
+            }
+          })();
+          return () => { mounted = false; };
+        }, [symbols, apiKey]);
+
+        const filtered = useMemo(() => {
+          const q = query.trim().toUpperCase();
+          const base = rows.filter(r => !q || r.symbol.toUpperCase().includes(q));
+          const sorted = [...base].sort((a, b) => {
+            const dir = sort.dir === 'asc' ? 1 : -1;
+            const get = (row) => {
+              if (sort.by === 'symbol') return row.symbol;
+              if (sort.by === 'price') return row.price ?? -Infinity;
+              if (sort.by === 'changePct') return row.changePct ?? -Infinity;
+              return row.symbol;
+            };
+            const av = get(a);
+            const bv = get(b);
+            if (av < bv) return -1 * dir;
+            if (av > bv) return 1 * dir;
+            return 0;
+          });
+          return sorted;
+        }, [rows, query, sort]);
+
+        const onSaveKey = () => {
+          localStorage.setItem('FINNHUB_KEY', apiKey);
+          alert('API key saved locally to your browser.');
+        };
+
+        const onAddSymbol = (evt) => {
+          evt.preventDefault();
+          const form = evt.target;
+          const input = form.symbol;
+          const val = (input.value || '').trim().toUpperCase();
+          if (val && !symbols.includes(val)) setSymbols([...symbols, val]);
+          input.value = '';
+        };
+
+        const header = (id, label, align = 'left') => (
+          <th
+            onClick={() => setSort(
+              (s) => ({ by: id, dir: s.by === id && s.dir === 'asc' ? 'desc' : 'asc' })
+            )}
+            className={`px-4 py-2 text-${align} text-sm font-semibold cursor-pointer select-none`}
+          >
+            <div className="flex items-center gap-1">
+              <span>{label}</span>
+              {sort.by === id && (
+                <span className="text-gray-400">{sort.dir === 'asc' ? '▲' : '▼'}</span>
+              )}
+            </div>
+          </th>
+        );
+
+        return (
+          <div className="max-w-6xl mx-auto p-4 sm:p-6">
+            <header className="mb-6">
+              <h1 className="text-2xl font-bold">📈 Stock Dashboard</h1>
+              <p className="text-sm text-gray-600">React + Tailwind + Chart.js • Deployed on GitHub Pages</p>
+            </header>
+
+            <section className="mb-6 grid gap-4 sm:grid-cols-2">
+              <div className="p-4 bg-white rounded-2xl shadow">
+                <label className="block text-sm font-medium mb-1">Finnhub API Key</label>
+                <div className="flex gap-2">
+                  <input
+                    className="w-full rounded-xl border px-3 py-2 text-sm"
+                    placeholder="Enter your Finnhub API key"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                  <button onClick={onSaveKey} className="px-3 py-2 rounded-xl bg-black text-white text-sm">Save</button>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Get a free key at finnhub.io (free tier: 60 requests/min). The key is stored only in your browser via localStorage.</p>
+              </div>
+
+              <div className="p-4 bg-white rounded-2xl shadow">
+                <form onSubmit={onAddSymbol} className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium mb-1">Add Symbol</label>
+                    <input name="symbol" className="w-full rounded-xl border px-3 py-2 text-sm" placeholder="e.g., NVDA" />
+                  </div>
+                  <button className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm">Add</button>
+                </form>
+                <div className="mt-3">
+                  <label className="block text-sm font-medium mb-1">Search</label>
+                  <input
+                    className="w-full rounded-xl border px-3 py-2 text-sm"
+                    placeholder="Filter symbols"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="bg-white rounded-2xl shadow">
+              <div className="p-4 border-b flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <h2 className="font-semibold">Watchlist</h2>
+                  {loading && <Spinner />}
+                  {!loading && (
+                    <Pill intent="neutral">{rows.filter(r => !r.error).length}/{symbols.length} loaded</Pill>
+                  )}
+                </div>
+                {error && <span className="text-sm text-red-600">{error}</span>}
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      {header('symbol', 'Symbol')}
+                      {header('price', 'Price', 'right')}
+                      <th className="px-4 py-2 text-right text-sm font-semibold">Change</th>
+                      {header('changePct', 'Change %', 'right')}
+                      <th className="px-4 py-2 text-right text-sm font-semibold">Updated</th>
+                      <th className="px-4 py-2 text-right text-sm font-semibold"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((row) => {
+                      const neg = (row.change ?? 0) < 0;
+                      return (
+                        <tr key={row.symbol} className="border-t hover:bg-gray-50">
+                          <td className="px-4 py-2 font-medium">{row.symbol}</td>
+                          <td className="px-4 py-2 text-right tabular-nums">{fmtCurrency(row.price)}</td>
+                          <td className={`px-4 py-2 text-right tabular-nums ${neg ? 'text-red-600' : 'text-green-700'}`}>
+                            {row.change == null ? '-' : row.change.toFixed(2)}
+                          </td>
+                          <td className={`px-4 py-2 text-right tabular-nums ${neg ? 'text-red-600' : 'text-green-700'}`}>
+                            {row.changePct == null ? '-' : fmtPct(row.changePct)}
+                          </td>
+                          <td className="px-4 py-2 text-right text-xs text-gray-500">
+                            {row.updatedAt ? row.updatedAt.toLocaleTimeString() : '-'}
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            {row.error ? (
+                              <Pill intent="danger">{row.error}</Pill>
+                            ) : (
+                              <button
+                                className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-xs"
+                                onClick={() => setSelected(row.symbol)}
+                              >
+                                View Chart
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <footer className="text-xs text-gray-500 mt-6">
+              <p>
+                Educational use only. Prices are provided by Finnhub. Free tiers have rate limits; keep your watchlist small.
+              </p>
+            </footer>
+
+            <Modal open={!!selected} onClose={() => setSelected(null)} title={`Chart • ${selected || ''}`}>
+              {selected && <Chart symbol={selected} apiKey={apiKey} />}
+            </Modal>
+          </div>
+        );
+      }
+
+      // Chart.js global ref for ease
+      const ChartJS = window.Chart;
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
