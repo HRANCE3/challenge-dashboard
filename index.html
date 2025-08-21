@@ -4,14 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stock Dashboard</title>
-    <!-- Tailwind via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React + ReactDOM (production) -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel for inline JSX (fine for demo; for prod use a bundler) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Chart.js for optional chart -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <link rel="icon" href="data:," />
   </head>
@@ -21,18 +17,15 @@
     <script type="text/babel">
       const { useEffect, useMemo, useRef, useState } = React;
 
-      // --- Utils
       const fmtCurrency = (n) => (n == null || isNaN(n) ? '-' : n.toLocaleString(undefined, { style: 'currency', currency: 'USD' }));
       const fmtPct = (n) => (n == null || isNaN(n) ? '-' : `${(n).toFixed(2)}%`);
 
-      // --- Finnhub API helpers
       const FINNHUB_BASE = 'https://finnhub.io/api/v1';
       async function fetchQuote(symbol, apiKey) {
         const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`;
         const res = await fetch(url);
         if (!res.ok) throw new Error(`Quote fetch failed for ${symbol}`);
         const data = await res.json();
-        // data fields: c=current, d=change, dp=percent, h=high, l=low, o=open, pc=prev close, t=timestamp
         return {
           symbol,
           price: data.c ?? null,
@@ -43,6 +36,7 @@
       }
 
       async function fetchCandles(symbol, apiKey, days = 120) {
+        if (!apiKey) throw new Error("Missing API key");
         const nowSec = Math.floor(Date.now() / 1000);
         const fromSec = nowSec - days * 24 * 60 * 60;
         const url = `${FINNHUB_BASE}/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=D&from=${fromSec}&to=${nowSec}&token=${apiKey}`;
@@ -50,10 +44,9 @@
         if (!res.ok) throw new Error('Candle fetch failed');
         const data = await res.json();
         if (data.s !== 'ok') throw new Error(data.s || 'No data');
-        return data; // { c, h, l, o, s, t, v }
+        return data;
       }
 
-      // --- Components
       function Pill({ children, intent = 'neutral' }) {
         const map = {
           neutral: 'bg-gray-100 text-gray-800',
@@ -111,7 +104,7 @@
                 data: {
                   labels,
                   datasets: [
-                    { label: `${symbol} Close`, data: prices, borderWidth: 2, fill: false, tension: 0.15 },
+                    { label: `${symbol} Close`, data: prices, borderColor: 'rgb(37,99,235)', borderWidth: 2, fill: false, tension: 0.15 },
                   ],
                 },
                 options: { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { maxTicksLimit: 8 } } } },
@@ -133,7 +126,6 @@
       }
 
       function App() {
-        // Default list; keep short to respect free tier limits
         const [symbols, setSymbols] = useState(['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']);
         const [apiKey, setApiKey] = useState(localStorage.getItem('FINNHUB_KEY') || '');
         const [query, setQuery] = useState('');
@@ -141,10 +133,10 @@
         const [rows, setRows] = useState([]);
         const [loading, setLoading] = useState(false);
         const [error, setError] = useState(null);
-        const [selected, setSelected] = useState(null); // symbol for chart
+        const [selected, setSelected] = useState(null);
 
         useEffect(() => {
-          if (!apiKey) return; // wait until user provides an API key
+          if (!apiKey) return;
           let mounted = true;
           (async () => {
             try {
@@ -275,7 +267,7 @@
                       <th className="px-4 py-2 text-right text-sm font-semibold">Change</th>
                       {header('changePct', 'Change %', 'right')}
                       <th className="px-4 py-2 text-right text-sm font-semibold">Updated</th>
-                      <th className="px-4 py-2 text-right text-sm font-semibold"></th>
+                      <th className="px-4 py-2 text-right text-sm font-semibold">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -295,25 +287,25 @@
                             {row.updatedAt ? row.updatedAt.toLocaleTimeString() : '-'}
                           </td>
                           <td className="px-4 py-2 text-right flex justify-end gap-2">
-  {row.error ? (
-    <Pill intent="danger">{row.error}</Pill>
-  ) : (
-    <>
-      <button
-        className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-xs"
-        onClick={() => setSelected(row.symbol)}
-      >
-        View Chart
-      </button>
-      <button
-        className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs"
-        onClick={() => setSymbols(symbols.filter((s) => s !== row.symbol))}
-      >
-        Remove
-      </button>
-    </>
-  )}
-</td>
+                            {row.error ? (
+                              <Pill intent="danger">{row.error}</Pill>
+                            ) : (
+                              <>
+                                <button
+                                  className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-xs"
+                                  onClick={() => setSelected(row.symbol)}
+                                >
+                                  View Chart
+                                </button>
+                                <button
+                                  className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs"
+                                  onClick={() => setSymbols(symbols.filter((s) => s !== row.symbol))}
+                                >
+                                  Remove
+                                </button>
+                              </>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -335,9 +327,7 @@
         );
       }
 
-      // Chart.js global ref for ease
       const ChartJS = window.Chart;
-
       const root = ReactDOM.createRoot(document.getElementById('root'));
       root.render(<App />);
     </script>
